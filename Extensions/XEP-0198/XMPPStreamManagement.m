@@ -1149,13 +1149,15 @@
 - (void)_sendAck
 {
 	NSUInteger pending = 0;
-	for (XMPPStreamManagementIncomingStanza *stanza in unackedByClient)
-	{
-		if (stanza.isHandled)
-			pending++;
-		else
-			break;
-	}
+    
+    for (int i=0; i<unackedByClient.count; i++) {
+        XMPPStreamManagementIncomingStanza *stanza = (XMPPStreamManagementIncomingStanza*)[unackedByClient objectAtIndex:i];
+        if (stanza.isHandled) {
+            pending++;
+        } else {
+            break;
+        }
+    }
 	
 	if (pending > 0)
 	{
@@ -1163,7 +1165,7 @@
 		unackedByClient_lastAckOffset += pending;
 		lastHandledByClient += pending;
 		
-		XMPPLogVerbose(@"%@: sendAck: lastHandledByClient(%u) inc(%lu) totalPending(%lu)", THIS_FILE,
+		NSLog(@"%@: sendAck: lastHandledByClient(%u) inc(%lu) totalPending(%lu)", THIS_FILE,
 		               lastHandledByClient,
 		               (unsigned long)pending,
 		               (unsigned long)unackedByClient_lastAckOffset);
@@ -1306,7 +1308,6 @@
 	{
 		__weak id weakSelf = self;
 		autoAckTimer = [[XMPPTimer alloc] initWithQueue:moduleQueue eventHandler:^{ @autoreleasepool{
-			
 			[weakSelf sendAck];
 		}}];
 		
@@ -1320,7 +1321,7 @@
 {
 	XMPPLogTrace();
 	
-	if (stanzaId == nil) return;
+    if (stanzaId == nil) return;
 	
 	dispatch_block_t block = ^{ @autoreleasepool {
 		
@@ -1344,19 +1345,16 @@
 		
 		BOOL found = NO;
 		
-		for (XMPPStreamManagementIncomingStanza *stanza in unackedByClient)
-		{
-			if (stanza.isHandled)
-			{
-				// continue
-			}
-			else if ([stanza.stanzaId isEqual:stanzaId])
-			{
-				stanza.isHandled = YES;
-				found = YES;
-				break;
-			}
-		}
+        for (int i=0; i<unackedByClient.count; i++) {
+            XMPPStreamManagementIncomingStanza *stanza = (XMPPStreamManagementIncomingStanza*)[unackedByClient objectAtIndex:i];
+            if (stanza.isHandled) {
+                // continue
+            } else if ([stanza.stanzaId isEqual:stanzaId]) {
+                stanza.isHandled = YES;
+                found = YES;
+                break;
+            }
+        }
 		
 		if (found)
 		{
