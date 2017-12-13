@@ -40,6 +40,8 @@
 	
     NSString *type = [self type];
     
+    [message addAttributeWithName:@"id" stringValue:[[NSUUID UUID] UUIDString]];
+    
     if (type) {
         [message addAttributeWithName:@"type" stringValue:type];
     }
