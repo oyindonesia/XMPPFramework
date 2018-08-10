@@ -10,6 +10,7 @@
 //#import <KissXML/KissXML.h>
 //#import <CocoaAsyncSocket/GCDAsyncSocket.h>
 
+#define USE_OY_AUTH 1
 
 @class XMPPSRVResolver;
 @class XMPPParser;
@@ -113,6 +114,12 @@ extern const NSTimeInterval XMPPStreamTimeoutNone;
  * The default port is 5222.
 **/
 @property (readwrite, assign) UInt16 hostPort;
+
+/**
+ * Use OY-1.0 Authentication flow for stream auth and negotiation.
+ * This flow only support classic TLS mode, so startTLS should be disabled
+**/
+@property (readwrite, assign) bool useOyAuth;
 
 /**
  * The stream's policy on when to Start TLS.

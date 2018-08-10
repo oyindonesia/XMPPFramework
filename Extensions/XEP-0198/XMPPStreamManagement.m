@@ -137,7 +137,7 @@
 
 - (NSSet *)xep0198Elements
 {
-	return [NSSet setWithObjects:@"r", @"a", @"enable", @"enabled", @"resume", @"resumed", @"failed", nil];
+	return [NSSet setWithObjects:@"r", @"a", @"enable", @"enabled", @"resume", @"resumed", @"failed", @"oyauth-success", nil];
 }
 
 - (void)didActivate
@@ -377,8 +377,8 @@
 		if (maxTimeout > 0.0) {
 			[enable addAttributeWithName:@"max" stringValue:[NSString stringWithFormat:@"%.0f", maxTimeout]];
 		}
-		
-		[xmppStream sendElement:enable];
+        if(![xmppStream useOyAuth])
+		    [xmppStream sendElement:enable];
 		
 		enableQueued = YES;
 		requestedMax = (maxTimeout > 0.0) ? (uint32_t)maxTimeout : (uint32_t)0;
@@ -1816,6 +1816,35 @@
 		{
 			XMPPLogWarn(@"Received unrequested <enabled/> stanza");
 		}
+	}
+	else if ([elementName isEqualToString:@"oyauth-success"])
+	{
+		// <oyauth-success xmlns="urn:oy:auth" sm-resume='false' sm-max='0' sm-id='invalid'/>
+
+		NSString *resumptionId = nil;
+		uint32_t max = 0;
+
+		BOOL canResume = [element attributeBoolValueForName:@"sm-resume" withDefaultValue:NO];
+		if (canResume)
+		{
+			resumptionId = [element attributeStringValueForName:@"sm-id"];
+			max = [element attributeUInt32ValueForName:@"sm-max" withDefaultValue:requestedMax];
+		}
+
+		[storage setResumptionId:resumptionId
+						 timeout:max
+				  lastDisconnect:[NSDate date]
+					   forStream:xmppStream];
+
+		[multicastDelegate xmppStreamManagement:self wasEnabled:element];
+
+		isStarted = YES;
+		enableSent = NO;
+
+		lastHandledByClient = 0;
+		lastHandledByServer = 0;
+
+		unprocessedReceivedAcks = nil;
 	}
 	else if ([elementName isEqualToString:@"failed"])
 	{

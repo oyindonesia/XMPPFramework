@@ -20,7 +20,7 @@
 
 // Log levels: off, error, warn, info, verbose
 #if DEBUG
-  static const int xmppLogLevel = XMPP_LOG_LEVEL_INFO | XMPP_LOG_FLAG_SEND_RECV; // | XMPP_LOG_FLAG_TRACE;
+  static const int xmppLogLevel = XMPP_LOG_LEVEL_INFO | XMPP_LOG_FLAG_SEND_RECV | XMPP_LOG_FLAG_TRACE;
 #else
   static const int xmppLogLevel = XMPP_LOG_LEVEL_WARN;
 #endif
@@ -107,8 +107,9 @@ enum XMPPStreamConfig
 	
 	NSString *hostName;
 	UInt16 hostPort;
-    
-    XMPPStreamStartTLSPolicy startTLSPolicy;
+
+	bool useOyAuth;
+	XMPPStreamStartTLSPolicy startTLSPolicy;
     BOOL skipStartSession;
     BOOL validatesResponses;
     BOOL preferIPv6;
@@ -1963,46 +1964,41 @@ enum XMPPStreamConfig
 			result = NO;
 			return_from_block;
 		}
-		
+
 		// Choose the best authentication method.
-		// 
+		//
 		// P.S. - This method is deprecated.
-		
+
 		id <XMPPSASLAuthentication> someAuth = nil;
-        
-		if ([self supportsSCRAMSHA1Authentication])
-		{
-			someAuth = [[XMPPSCRAMSHA1Authentication alloc] initWithStream:self password:password];
-			result = [self authenticate:someAuth error:&err];
-		}
-		else if ([self supportsDigestMD5Authentication])
-		{
-			someAuth = [[XMPPDigestMD5Authentication alloc] initWithStream:self password:password];
-			result = [self authenticate:someAuth error:&err];
-		}
-		else if ([self supportsPlainAuthentication])
-		{
+
+        if ([self useOyAuth])
+        {
 			someAuth = [[XMPPPlainAuthentication alloc] initWithStream:self password:password];
 			result = [self authenticate:someAuth error:&err];
-		}
-		else if ([self supportsDeprecatedDigestAuthentication])
-		{
-			someAuth = [[XMPPDeprecatedDigestAuthentication alloc] initWithStream:self password:password];
-			result = [self authenticate:someAuth error:&err];
-		}
-		else if ([self supportsDeprecatedPlainAuthentication])
-		{
-			someAuth = [[XMPPDeprecatedDigestAuthentication alloc] initWithStream:self password:password];
-			result = [self authenticate:someAuth error:&err];
-		}
-		else
-		{
-			NSString *errMsg = @"No suitable authentication method found";
-			NSDictionary *info = @{NSLocalizedDescriptionKey : errMsg};
-			
-			err = [NSError errorWithDomain:XMPPStreamErrorDomain code:XMPPStreamUnsupportedAction userInfo:info];
-			
-			result = NO;
+		}else {
+			if ([self supportsSCRAMSHA1Authentication]) {
+				someAuth = [[XMPPSCRAMSHA1Authentication alloc] initWithStream:self password:password];
+				result = [self authenticate:someAuth error:&err];
+			} else if ([self supportsDigestMD5Authentication]) {
+				someAuth = [[XMPPDigestMD5Authentication alloc] initWithStream:self password:password];
+				result = [self authenticate:someAuth error:&err];
+			} else if ([self supportsPlainAuthentication]) {
+				someAuth = [[XMPPPlainAuthentication alloc] initWithStream:self password:password];
+				result = [self authenticate:someAuth error:&err];
+			} else if ([self supportsDeprecatedDigestAuthentication]) {
+				someAuth = [[XMPPDeprecatedDigestAuthentication alloc] initWithStream:self password:password];
+				result = [self authenticate:someAuth error:&err];
+			} else if ([self supportsDeprecatedPlainAuthentication]) {
+				someAuth = [[XMPPDeprecatedDigestAuthentication alloc] initWithStream:self password:password];
+				result = [self authenticate:someAuth error:&err];
+			} else {
+				NSString *errMsg = @"No suitable authentication method found";
+				NSDictionary *info = @{NSLocalizedDescriptionKey: errMsg};
+
+				err = [NSError errorWithDomain:XMPPStreamErrorDomain code:XMPPStreamUnsupportedAction userInfo:info];
+
+				result = NO;
+			}
 		}
 	}};
 	
@@ -2797,6 +2793,31 @@ enum XMPPStreamConfig
 		dispatch_async(xmppQueue, block);
 }
 
+/**
+ * Oky add. Send any string sequence down to wire
+ *
+**/
+- (void)sendCustomData:(NSString *)outgoingStr
+{
+    dispatch_block_t block = ^{ @autoreleasepool {
+
+		NSData *outgoingData = [outgoingStr dataUsingEncoding:NSUTF8StringEncoding];
+
+		XMPPLogSend(@"SEND: %@", outgoingStr);
+		numberOfBytesSent += [outgoingData length];
+
+		[asyncSocket writeData:outgoingData
+				   withTimeout:TIMEOUT_XMPP_WRITE
+						   tag:TAG_XMPP_WRITE_STREAM];
+
+    }};
+
+    if (dispatch_get_specific(xmppQueueTag))
+        block();
+    else
+        dispatch_async(xmppQueue, block);
+}
+
 - (void)receiveIQ:(XMPPIQ *)iq
 {
 	NSAssert(dispatch_get_specific(xmppQueueTag), @"Invoked on incorrect queue");
@@ -3239,7 +3260,7 @@ enum XMPPStreamConfig
 	NSAssert(![self didStartNegotiation], @"Invoked after initial negotiation has started");
 	
 	XMPPLogTrace();
-	
+
 	// Initialize the XML stream
 	[self sendOpeningNegotiation];
 	
@@ -3435,23 +3456,53 @@ enum XMPPStreamConfig
 		
 		[asyncSocket startTLS:settings];
 		[self setIsSecure:YES];
-		
-		// Note: We don't need to wait for asyncSocket to complete TLS negotiation.
-		// We can just continue reading/writing to the socket, and it will handle queueing everything for us!
-		
-		if ([self didStartNegotiation])
+
+        if([self useOyAuth]) {
+			// Inform delegate that the TCP connection is open, and the stream handshake has begun
+			[multicastDelegate xmppStreamDidStartNegotiation:self];
+
+			// And start reading in the server's XML stream
+			[asyncSocket readDataWithTimeout:TIMEOUT_XMPP_READ_START tag:TAG_XMPP_READ_START];
+
+			[self setDidStartNegotiation:YES];
+
+			if (parser == nil) {
+				XMPPLogVerbose(@"%@: Initializing parser...", THIS_FILE);
+
+				// Need to create the parser.
+				parser = [[XMPPParser alloc] initWithDelegate:self delegateQueue:xmppQueue];
+			} else {
+				XMPPLogVerbose(@"%@: Resetting parser...", THIS_FILE);
+
+				// We're restarting our negotiation, so we need to reset the parser.
+				parser = [[XMPPParser alloc] initWithDelegate:self delegateQueue:xmppQueue];
+			}
+
+			state = STATE_XMPP_CONNECTED;
+
+			if (![self isAuthenticated]) {
+				[self setupKeepAliveTimer];
+
+				// Notify delegates
+				[multicastDelegate xmppStreamDidConnect:self];
+			}
+		}else
 		{
-			// Now we start our negotiation over again...
-			[self sendOpeningNegotiation];
-			
-			// We paused reading from the socket.
-			// We're ready to continue now.
-			[asyncSocket readDataWithTimeout:TIMEOUT_XMPP_READ_STREAM tag:TAG_XMPP_READ_STREAM];
-		}
-		else
-		{
-			// First time starting negotiation
-			[self startNegotiation];
+			// Note: We don't need to wait for asyncSocket to complete TLS negotiation.
+			// We can just continue reading/writing to the socket, and it will handle queueing everything for us!
+
+			if ([self didStartNegotiation])
+			{
+				// Now we start our negotiation over again...
+				[self sendOpeningNegotiation];
+
+				// We paused reading from the socket.
+				// We're ready to continue now.
+				[asyncSocket readDataWithTimeout:TIMEOUT_XMPP_READ_STREAM tag:TAG_XMPP_READ_STREAM];
+			} else {
+				// First time starting negotiation
+				[self startNegotiation];
+			}
 		}
 	}
 }
@@ -3593,44 +3644,54 @@ enum XMPPStreamConfig
 	XMPPLogTrace();
 	
 	XMPPHandleAuthResponse result = [auth handleAuth:authResponse];
+	NSString *elementName = [authResponse name];
 	
 	if (result == XMPP_AUTH_SUCCESS)
 	{
-		// We are successfully authenticated (via sasl:digest-md5)
+		// We are successfully authenticated
 		[self setIsAuthenticated:YES];
-		
-		BOOL shouldRenegotiate = YES;
-		if ([auth respondsToSelector:@selector(shouldResendOpeningNegotiationAfterSuccessfulAuthentication)])
-		{
-			shouldRenegotiate = [auth shouldResendOpeningNegotiationAfterSuccessfulAuthentication];
-		}
-		
-		if (shouldRenegotiate)
-		{
-			// Now we start our negotiation over again...
-			[self sendOpeningNegotiation];
-			
-			if (![self isSecure])
-			{
-				// Normally we requeue our read operation in xmppParserDidParseData:.
-				// But we just reset the parser, so that code path isn't going to happen.
-				// So start read request here.
-				// The state is STATE_XMPP_OPENING, set via sendOpeningNegotiation method.
-				
-				[asyncSocket readDataWithTimeout:TIMEOUT_XMPP_READ_START tag:TAG_XMPP_READ_START];
+
+        if(![self useOyAuth]) {
+			BOOL shouldRenegotiate = YES;
+			if ([auth respondsToSelector:@selector(shouldResendOpeningNegotiationAfterSuccessfulAuthentication)]) {
+				shouldRenegotiate = [auth shouldResendOpeningNegotiationAfterSuccessfulAuthentication];
 			}
-		}
-		else
+
+			if (shouldRenegotiate) {
+				// Now we start our negotiation over again...
+				[self sendOpeningNegotiation];
+
+				if (![self isSecure]) {
+					// Normally we requeue our read operation in xmppParserDidParseData:.
+					// But we just reset the parser, so that code path isn't going to happen.
+					// So start read request here.
+					// The state is STATE_XMPP_OPENING, set via sendOpeningNegotiation method.
+
+					[asyncSocket readDataWithTimeout:TIMEOUT_XMPP_READ_START tag:TAG_XMPP_READ_START];
+				}
+			} else {
+				// Revert back to connected state (from authenticating state)
+				state = STATE_XMPP_CONNECTED;
+
+				[multicastDelegate xmppStreamDidAuthenticate:self];
+			}
+		}else
 		{
 			// Revert back to connected state (from authenticating state)
 			state = STATE_XMPP_CONNECTED;
-			
+
 			[multicastDelegate xmppStreamDidAuthenticate:self];
+
+			// we need to retreat auth success as Stream Management's <enabled> tag,
+			if ([customElementNames countForObject:elementName])
+			{
+				[multicastDelegate xmppStream:self didReceiveCustomElement:authResponse];
+			}
 		}
-		
+
 		// Done with auth
 		auth = nil;
-		
+
 	}
 	else if (result == XMPP_AUTH_FAIL)
 	{
@@ -4204,16 +4265,50 @@ enum XMPPStreamConfig
 	
 	srvResolver = nil;
 	srvResults = nil;
-	
-	// Are we using old-style SSL? (Not the upgrade to TLS technique specified in the XMPP RFC)
-	if ([self isSecure])
-	{
-		// The connection must be secured immediately (just like with HTTPS)
-		[self startTLS];
-	}
-	else
-	{
-		[self startNegotiation];
+
+    if([self useOyAuth]) {
+		// oldschool SSL direct connection
+		if ([self isSecure]) {
+			// The connection must be secured immediately (just like with HTTPS)
+			[self startTLS];
+		} else {
+			// Inform delegate that the TCP connection is open, and the stream handshake has begun
+			[multicastDelegate xmppStreamDidStartNegotiation:self];
+
+			// And start reading in the server's XML stream
+			[asyncSocket readDataWithTimeout:TIMEOUT_XMPP_READ_START tag:TAG_XMPP_READ_START];
+
+			[self setDidStartNegotiation:YES];
+
+			if (parser == nil) {
+				XMPPLogVerbose(@"%@: Initializing parser...", THIS_FILE);
+
+				// Need to create the parser.
+				parser = [[XMPPParser alloc] initWithDelegate:self delegateQueue:xmppQueue];
+			} else {
+				XMPPLogVerbose(@"%@: Resetting parser...", THIS_FILE);
+
+				// We're restarting our negotiation, so we need to reset the parser.
+				parser = [[XMPPParser alloc] initWithDelegate:self delegateQueue:xmppQueue];
+			}
+
+			state = STATE_XMPP_CONNECTED;
+
+			if (![self isAuthenticated]) {
+				[self setupKeepAliveTimer];
+
+				// Notify delegates
+				[multicastDelegate xmppStreamDidConnect:self];
+			}
+		}
+	}else { //standard regular flow
+		// Are we using old-style SSL? (Not the upgrade to TLS technique specified in the XMPP RFC)
+		if ([self isSecure]) {
+			// The connection must be secured immediately (just like with HTTPS)
+			[self startTLS];
+		} else {
+			[self startNegotiation];
+		}
 	}
 }
 
@@ -4424,7 +4519,10 @@ enum XMPPStreamConfig
 	// We save the root element of our stream for future reference.
 	
 	rootElement = root;
-	
+
+	if(([self useOyAuth])&&(state == STATE_XMPP_AUTH || state==STATE_XMPP_STARTTLS_1))
+		return;
+
 	if ([self isP2P])
 	{
 		// XEP-0174 specifies that <stream:features/> SHOULD be sent by the receiver.

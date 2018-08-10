@@ -92,6 +92,11 @@ extern NSString *const XMPPStreamDidChangeMyJIDNotification;
 - (void)sendBindElement:(NSXMLElement *)element;
 
 /**
+ * Oky add. Send any string sequence down to wire
+ *
+**/
+- (void)sendCustomData:(NSString *)outgoingStr;
+/**
  * This method allows you to inject an element into the stream as if it was received on the socket.
  * This is an advanced technique, but makes for some interesting possibilities.
 **/
