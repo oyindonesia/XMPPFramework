@@ -76,6 +76,8 @@ enum XMPPStreamConfig
 
 @interface XMPPStream ()
 {
+    dispatch_queue_attr_t xmppLowPriorityAttributes;
+    dispatch_queue_t xmppLowPriorityQueue;
 	dispatch_queue_t xmppQueue;
 	void *xmppQueueTag;
 	
@@ -169,8 +171,11 @@ enum XMPPStreamConfig
 - (void)commonInit
 {
 	xmppQueueTag = &xmppQueueTag;
+    xmppLowPriorityAttributes = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0);
+    xmppLowPriorityQueue = dispatch_queue_create("xmpp.lowPriority", xmppLowPriorityAttributes);
 	xmppQueue = dispatch_queue_create("xmpp", DISPATCH_QUEUE_SERIAL);
 	dispatch_queue_set_specific(xmppQueue, xmppQueueTag, xmppQueueTag, NULL);
+    dispatch_queue_set_specific(xmppLowPriorityQueue, xmppQueueTag, xmppQueueTag, NULL);
 	
 	willSendIqQueue = dispatch_queue_create("xmpp.willSendIq", DISPATCH_QUEUE_SERIAL);
 	willSendMessageQueue = dispatch_queue_create("xmpp.willSendMessage", DISPATCH_QUEUE_SERIAL);
@@ -247,6 +252,7 @@ enum XMPPStreamConfig
 - (void)dealloc
 {
 	#if !OS_OBJECT_USE_OBJC
+    dispatch_release(xmppLowPriorityQueue)
 	dispatch_release(xmppQueue);
 	
 	dispatch_release(willSendIqQueue);
@@ -2346,15 +2352,36 @@ enum XMPPStreamConfig
 			
 			if (modifiedMessage)
 			{
-				dispatch_async(xmppQueue, ^{ @autoreleasepool {
-					
-					if (state == STATE_XMPP_CONNECTED) {
-						[self continueSendMessage:modifiedMessage withTag:tag];
-					}
-					else {
-						[self failToSendMessage:modifiedMessage];
-					}
-				}});
+                if ([message elementsForName: @"received"] != nil || [[[message elementsForName: @"x"] firstObject] elementsForName: @"displayed"] != nil || [message elementsForName: @"displayed"] != nil)
+                {
+                        
+                    dispatch_async(xmppLowPriorityQueue, ^{ @autoreleasepool {
+                        
+                        if (state == STATE_XMPP_CONNECTED)
+                        {
+                            [self continueSendMessage:modifiedMessage withTag:tag];
+                        }
+                        else
+                        {
+                            [self failToSendMessage:modifiedMessage];
+                        }
+                    }});
+                }
+                else
+                {
+                    
+                    dispatch_async(xmppQueue, ^{ @autoreleasepool {
+                        
+                        if (state == STATE_XMPP_CONNECTED)
+                        {
+                            [self continueSendMessage:modifiedMessage withTag:tag];
+                        }
+                        else
+                        {
+                            [self failToSendMessage:modifiedMessage];
+                        }
+                    }});
+                }
 			}
 		}});
 	}
