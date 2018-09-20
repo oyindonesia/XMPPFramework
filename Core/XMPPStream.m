@@ -2352,36 +2352,18 @@ enum XMPPStreamConfig
 			
 			if (modifiedMessage)
 			{
-                if ([message elementsForName: @"received"] != nil || [[[message elementsForName: @"x"] firstObject] elementsForName: @"displayed"] != nil || [message elementsForName: @"displayed"] != nil)
-                {
-                        
-                    dispatch_async(xmppLowPriorityQueue, ^{ @autoreleasepool {
-                        
-                        if (state == STATE_XMPP_CONNECTED)
-                        {
-                            [self continueSendMessage:modifiedMessage withTag:tag];
-                        }
-                        else
-                        {
-                            [self failToSendMessage:modifiedMessage];
-                        }
-                    }});
-                }
-                else
-                {
                     
-                    dispatch_async(xmppQueue, ^{ @autoreleasepool {
-                        
-                        if (state == STATE_XMPP_CONNECTED)
-                        {
-                            [self continueSendMessage:modifiedMessage withTag:tag];
-                        }
-                        else
-                        {
-                            [self failToSendMessage:modifiedMessage];
-                        }
-                    }});
-                }
+                dispatch_async(xmppQueue, ^{ @autoreleasepool {
+                    
+                    if (state == STATE_XMPP_CONNECTED)
+                    {
+                        [self continueSendMessage:modifiedMessage withTag:tag];
+                    }
+                    else
+                    {
+                        [self failToSendMessage:modifiedMessage];
+                    }
+                }});
 			}
 		}});
 	}
